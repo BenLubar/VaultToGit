@@ -13,39 +13,95 @@ namespace VaultToGit
         static void Main(string[] args)
         {
             ServerOperations.SetLoginOptions(Config.Instance.URL, Config.Instance.Username, Config.Instance.Password, Config.Instance.Repository, false);
-            try
-            {
-                Directory.Delete("VaultToGitTemp", true);
-            }
-            catch (DirectoryNotFoundException)
-            {
-                // ignore
-            }
 
-            Directory.CreateDirectory("VaultToGitTemp");
-            using (var init = Process.Start(new ProcessStartInfo("git", "init")
+            long start = 0;
+            if (Directory.Exists("VaultToGitTemp"))
             {
-                WorkingDirectory = "VaultToGitTemp",
-                UseShellExecute = false,
-            }))
-            {
-                init.WaitForExit();
+                using (var count = Process.Start(new ProcessStartInfo("git", "rev-list --count master")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                }))
+                {
+                    var output = count.StandardOutput.ReadToEnd();
+                    start = Convert.ToInt64(output.Trim(), 10);
+                    count.WaitForExit();
+                }
             }
-            using (var init = Process.Start(new ProcessStartInfo("git", "lfs install")
+            else
             {
-                WorkingDirectory = "VaultToGitTemp",
-                UseShellExecute = false,
-            }))
-            {
-                init.WaitForExit();
-            }
-            using (var init = Process.Start(new ProcessStartInfo("git", "lfs track *.png *.jpg *.gif *.ico *.zip *.snk *.so *.dylib *.dll *.exe")
-            {
-                WorkingDirectory = "VaultToGitTemp",
-                UseShellExecute = false,
-            }))
-            {
-                init.WaitForExit();
+                Directory.CreateDirectory("VaultToGitTemp");
+                using (var init = Process.Start(new ProcessStartInfo("git", "init")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                }))
+                {
+                    init.WaitForExit();
+                }
+                using (var init = Process.Start(new ProcessStartInfo("git", "config user.name \"VaultToGit Importer\"")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                }))
+                {
+                    init.WaitForExit();
+                }
+                using (var init = Process.Start(new ProcessStartInfo("git", $"config user.email \"{Config.Instance.Username}@{Config.Instance.EmailDomain}\"")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                }))
+                {
+                    init.WaitForExit();
+                }
+                using (var init = Process.Start(new ProcessStartInfo("git", "lfs install")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                }))
+                {
+                    init.WaitForExit();
+                }
+                using (var init = Process.Start(new ProcessStartInfo("git", "lfs track *.png *.jpg *.gif *.ico *.zip *.snk *.so *.dylib *.dll *.exe")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                }))
+                {
+                    init.WaitForExit();
+                }
+                File.WriteAllText(@"VaultToGitTemp\.gitignore", @"_sg*
+~sak*
+*.tmp
+*.bak
+
+*.suo
+*.clw
+*.config
+*.dca
+*.dll
+*.dsw
+*.exe
+*.hlp
+*.incr
+*.ncb
+*.opt
+*.pdb
+*.plg
+*.scc
+*.suo
+*.user
+*.vbw
+*.webuser
+
+bin/
+debug/
+obj/
+release/
+.vs/
+", System.Text.Encoding.UTF8);
             }
 
             try
@@ -77,7 +133,7 @@ namespace VaultToGit
                     SetFileTime = SetFileTimeType.CheckIn,
                 };
 
-                for (long start = 0; ; start += 1000)
+                for (; ; start += 1000)
                 {
                     VaultTxHistoryItem[] history = null;
                     int rowsRetrieved = 0;
@@ -124,6 +180,14 @@ namespace VaultToGit
                             commit.StandardInput.Close();
                             commit.WaitForExit();
                         }
+                    }
+                    using (var gc = Process.Start(new ProcessStartInfo("git", "gc --auto")
+                    {
+                        WorkingDirectory = "VaultToGitTemp",
+                        UseShellExecute = false,
+                    }))
+                    {
+                        gc.WaitForExit();
                     }
                 }
 
