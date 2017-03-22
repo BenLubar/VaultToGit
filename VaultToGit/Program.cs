@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -133,11 +134,11 @@ release/
                     SetFileTime = SetFileTimeType.CheckIn,
                 };
 
+                int rowsRetrieved = 0;
+                string queryToken = null;
                 for (; ; start += 1000)
                 {
                     VaultTxHistoryItem[] history = null;
-                    int rowsRetrieved = 0;
-                    string queryToken = null;
                     Console.WriteLine("Fetching history...");
                     ci.Connection.VersionHistoryBegin(1000, ci.ActiveRepositoryID, start, historyRequest, ref rowsRetrieved, ref queryToken);
                     try
@@ -198,6 +199,51 @@ release/
                 }))
                 {
                     gc.WaitForExit();
+                }
+
+                using (var count = Process.Start(new ProcessStartInfo("git", "rev-list --count master")
+                {
+                    WorkingDirectory = "VaultToGitTemp",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                }))
+                {
+                    var output = count.StandardOutput.ReadToEnd();
+                    start = Convert.ToInt64(output.Trim(), 10);
+                    count.WaitForExit();
+                }
+
+                Console.WriteLine($"Retrieving {start} transaction IDs...");
+                VaultTxHistoryItem[] items = null;
+                ci.Connection.VersionHistoryBegin((int)start, repositoryID, start, historyRequest, ref rowsRetrieved, ref queryToken);
+                ci.Connection.VersionHistoryFetch(queryToken, 0, rowsRetrieved - 1, ref items);
+                ci.Connection.VersionHistoryEnd(queryToken);
+
+                var txIDs = new Dictionary<long, string>();
+                foreach (var item in items)
+                {
+                    txIDs.Add(item.TxID, $"HEAD~{start - item.Version - 1}");
+                }
+
+                Console.WriteLine($"Processing labels...");
+                ci.BeginLabelQuery(ci.Repository.Root.FullPath, ci.Repository.Root.ID, true, false, false, true, 999999999, out int rowsRetrievedInherited, out int rowsRetrievedRecursive, out queryToken);
+                ci.GetLabelQueryItems_Recursive(queryToken, 0, rowsRetrievedRecursive - 1, out VaultLabelItemX[] labels);
+                ci.EndLabelQuery(queryToken);
+                foreach (var label in labels)
+                {
+                    var commit = txIDs[label.TxID];
+                    if (commit == null)
+                    {
+                        Console.WriteLine($"Could not find commit for label {label.Label}");
+                    }
+                    using (var tag = Process.Start(new ProcessStartInfo("git", $"tag -f \"{label.Label}\" {commit}")
+                    {
+                        WorkingDirectory = "VaultToGitTemp",
+                        UseShellExecute = false,
+                    }))
+                    {
+                        tag.WaitForExit();
+                    }
                 }
             }
             finally
