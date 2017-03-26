@@ -214,15 +214,18 @@ release/
                 }
 
                 Console.WriteLine($"Retrieving {start} transaction IDs...");
-                VaultTxHistoryItem[] items = null;
-                ci.Connection.VersionHistoryBegin((int)start, repositoryID, start, historyRequest, ref rowsRetrieved, ref queryToken);
-                ci.Connection.VersionHistoryFetch(queryToken, 0, rowsRetrieved - 1, ref items);
-                ci.Connection.VersionHistoryEnd(queryToken);
-
                 var txIDs = new Dictionary<long, string>();
-                foreach (var item in items)
+                for (long txStart = 0; txStart < start; txStart += 1000)
                 {
-                    txIDs.Add(item.TxID, $"HEAD~{start - item.Version - 1}");
+                    VaultTxHistoryItem[] items = null;
+                    ci.Connection.VersionHistoryBegin(1000, repositoryID, txStart, historyRequest, ref rowsRetrieved, ref queryToken);
+                    ci.Connection.VersionHistoryFetch(queryToken, 0, rowsRetrieved - 1, ref items);
+                    ci.Connection.VersionHistoryEnd(queryToken);
+
+                    foreach (var item in items)
+                    {
+                        txIDs[item.TxID] = $"HEAD~{start - item.Version - 1}";
+                    }
                 }
 
                 Console.WriteLine($"Processing labels...");
@@ -236,7 +239,7 @@ release/
                     {
                         Console.WriteLine($"Could not find commit for label {label.Label}");
                     }
-                    using (var tag = Process.Start(new ProcessStartInfo("git", $"tag -f \"{label.Label}\" {commit}")
+                    using (var tag = Process.Start(new ProcessStartInfo("git", $"tag -f \"{label.Label.Replace(' ', '-')}\" {commit}")
                     {
                         WorkingDirectory = "VaultToGitTemp",
                         UseShellExecute = false,
