@@ -1,16 +1,15 @@
 ﻿using LibGit2Sharp;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Text.RegularExpressions;
 
 namespace SplitGitRepo
 {
     class Program
     {
-        private static readonly string RepoPrefix = "git@github.com:Inedo/";
-
         private struct SharedRepo
         {
             public SharedRepo(string name, params string[] paths)
@@ -36,7 +35,7 @@ namespace SplitGitRepo
                 var shared = new[]
                 {
                     new SharedRepo("BuildMasterOtter.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtter.Web", "Otter/src/BuildMasterOtter.Web"),
-                    new SharedRepo("BuildMasterOtterProget.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtterProGet.Web", "ProGet/BuildMasterOtterProGet.Web", "Otter/src/BuildMasterOtterProGet.Web"),
+                    new SharedRepo("BuildMasterOtterProGet.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtterProGet.Web", "ProGet/BuildMasterOtterProGet.Web", "Otter/src/BuildMasterOtterProGet.Web"),
                     new SharedRepo("InedoLibWeb", "Otter/src/InedoLibWeb", "ProGet/InedoLibWeb"),
                     new SharedRepo("LESSCompiler", "Otter/LESSCompiler", "Crm1000/LESSCompiler", "InedoLib/LESSCompiler", "ProGet/LESSCompiler", "BuildMaster/LESSCompiler", "ChangeVision/AstahWebsite/Resources/LESSCompiler", "Inedo/inedo.com/Inedo.Com.Web.WebApplication/Resources/LESSCompiler"),
                     new SharedRepo("Consolation", "Otter/src/romp/Consolation", "ProGet/ProGet.Client/Consolation", "Inedo/incluser/incluser/Consolation", "Inedo.Agents/Inedo.Agents.Service/Consolation"),
@@ -103,7 +102,7 @@ namespace SplitGitRepo
         {
             var shared = sharedRepos.Where(r => r.Paths.Any(p => p.StartsWith(path + "/"))).Select(r => new
             {
-                Repo = RepoPrefix + r.Name,
+                Repo = "../" + r.Name + ".git",
                 Path = r.Paths.First(p => p.StartsWith(path + "/")).Substring(path.Length + 1),
                 Commits = r.Commits
             });
@@ -119,10 +118,6 @@ namespace SplitGitRepo
                 {
                     File.WriteAllText(Path.Combine("output", name, ".gitmodules"), string.Join("", shared.Select(s => $"[submodule \"{s.Path}\"]\n    path = {s.Path}\n    url = {s.Repo}\n")));
                     repo.Index.Add(".gitmodules");
-                    foreach (var s in shared)
-                    {
-                        repo.Submodules.Init(s.Path, false);
-                    }
                 }
 
                 foreach (var c in commits)
@@ -210,10 +205,69 @@ namespace SplitGitRepo
                         }
                     }
 
-                    var rewrittenCommit = repo.Commit(c.Message, c.Author, c.Committer, new CommitOptions { AllowEmptyCommit = true });
+                    var email = c.Author.Email == "blubar@inedo.com" ? "ben.lubar@gmail.com" : c.Author.Email;
+                    var rewrittenCommit = repo.Commit(c.Message, new Signature(c.Author.Name, email, c.Author.When), new Signature(c.Committer.Name, email, c.Author.When), new CommitOptions { AllowEmptyCommit = true });
                     yield return new Tuple<ObjectId, ObjectId>(c.Id, rewrittenCommit.Id);
                 }
+
+                repo.Network.Remotes.Add("origin", "git@gitlab.com:inedo/" + name + ".git");
+
+                Console.WriteLine("Copying LFS files...");
+                var lfsCount = CopyLfsFiles(repo, Path.Combine("output", name, ".git", "lfs", "objects"), Path.Combine(baseRepo.Info.WorkingDirectory, ".git", "lfs", "objects"));
+                Console.WriteLine($"Copied {lfsCount} files.");
+
+                // LibGit2Sharp doesn't support git gc, so we use the command line:
+                using (var gc = Process.Start(new ProcessStartInfo("git", "gc --aggressive")
+                {
+                    WorkingDirectory = repo.Info.WorkingDirectory,
+                    UseShellExecute = false
+                }))
+                {
+                    gc.WaitForExit();
+                }
             }
+        }
+
+        private static readonly Regex LfsFilePattern = new Regex(@"\.(exe|ico|zip|snk|dylib|dll|png|jpg|gif|so)$", RegexOptions.Compiled);
+        private static int CopyLfsFiles(Repository repo, string dest, string src)
+        {
+            int count = 0;
+            foreach (var commit in repo.Commits)
+            {
+                count += CopyLfsFiles(commit.Tree, dest, src);
+            }
+            return count;
+        }
+
+        private static int CopyLfsFiles(Tree tree, string dest, string src)
+        {
+            int count = 0;
+
+            foreach (var entry in tree)
+            {
+                if (entry.TargetType == TreeEntryTargetType.Blob && LfsFilePattern.IsMatch(entry.Name))
+                {
+                    var oid = ((Blob)entry.Target).GetContentText().Split('\n').ElementAt(1).Trim();
+                    if (!oid.StartsWith("oid sha256:"))
+                    {
+                        throw new FormatException($"OID format: {oid}");
+                    }
+                    oid = oid.Substring("oid sha256:".Length);
+
+                    Directory.CreateDirectory(Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2)));
+                    if (!File.Exists(Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2), oid)))
+                    {
+                        File.Copy(Path.Combine(src, oid.Substring(0, 2), oid.Substring(2, 2), oid), Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2), oid));
+                        count++;
+                    }
+                }
+                else if (entry.TargetType == TreeEntryTargetType.Tree)
+                {
+                    count += CopyLfsFiles((Tree)entry.Target, dest, src);
+                }
+            }
+
+            return count;
         }
     }
 }
