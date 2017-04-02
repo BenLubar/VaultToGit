@@ -1,4 +1,6 @@
-﻿namespace VaultToGit
+﻿using System.Collections.Generic;
+
+namespace VaultToGit
 {
     partial class Config
     {
@@ -8,7 +10,7 @@
         public string Host { get; set; }
         public string Username { get; set; }
         public string Password { get; set; }
-        public string Repository { get; set; }
+        public IDictionary<string, string> Repositories { get; set; }
         public string EmailDomain { get; set; }
     }
 }

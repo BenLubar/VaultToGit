@@ -24,6 +24,20 @@ namespace SplitGitRepo
             public List<Tuple<ObjectId, ObjectId>> Commits { get; }
         }
 
+        private struct MergedRepo
+        {
+            public MergedRepo(string name, string repo, IDictionary<string, string> mapping)
+            {
+                this.Name = name;
+                this.Repo = repo;
+                this.Mapping = mapping;
+            }
+
+            public string Name { get; }
+            public string Repo { get; }
+            public IDictionary<string, string> Mapping { get; }
+        }
+
         static void Main(string[] args)
         {
             using (var baseRepo = new Repository("VaultToGitTemp"))
@@ -32,6 +46,32 @@ namespace SplitGitRepo
                 Console.WriteLine("Enumerating root directories...");
                 var rootDirectories = commits.SelectMany(c => c.Tree.Where(t => t.TargetType == TreeEntryTargetType.Tree && !t.Name.Contains('-')).Select(t => t.Path)).Distinct().OrderBy(s => s).ToList();
                 Console.WriteLine($"Found {rootDirectories.Count} root directories.");
+                var merge = new[]
+                {
+                    new MergedRepo("BuildMaster", "VaultToGitTemp_BuildMaster", new Dictionary<string, string>
+                    {
+                        { "BuildMaster/BuildMasterSolution", "BuildMasterSolution" },
+                        { "TRUNK/BuildMasterSolution", "BuildMasterSolution" },
+                        { "BuildMaster/SqlScripts", "SqlScripts" },
+                        { "TRUNK/SqlScripts", "SqlScripts" },
+                        { "BuildMaster/deploy_production.vbs", "deploy_production.vbs" },
+                        { "TRUNK/deploy_production.vbs", "deploy_production.vbs" },
+                        { "BuildMaster/deploy_production.ps1", "deploy_production.ps1" },
+                        { "BuildMaster/stwiddle.exe", "stwiddle.exe" },
+                        { "TRUNK/stwiddle.exe", "stwiddle.exe" },
+                        { "BuildMaster/unzip.exe", "unzip.exe" },
+                        { "TRUNK/unzip.exe", "unzip.exe" },
+                        { "BuildMaster/zip.exe", "zip.exe" },
+                        { "TRUNK/zip.exe", "zip.exe" },
+                    }),
+                    new MergedRepo("BuildMasterInstaller", "VaultToGitTemp_BuildMaster", new Dictionary<string, string>
+                    {
+                        { "BuildMasterInstaller", "" },
+                        { "BuildMaster/Installer", "" },
+                        { "Installer", "" },
+                        { "TRUNK/Installer", "" },
+                    }),
+                };
                 var shared = new[]
                 {
                     new SharedRepo("BuildMasterOtter.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtter.Web", "Otter/src/BuildMasterOtter.Web"),
@@ -51,18 +91,39 @@ namespace SplitGitRepo
                 foreach (var s in shared)
                 {
                     Console.WriteLine($"Splitting {s.Name} (shared by {s.Paths.Length} projects)...");
-                    s.Commits.AddRange(SplitRepository(baseRepo, commits, s.Name, s.Paths[0], Enumerable.Empty<SharedRepo>()));
+                    s.Commits.AddRange(SplitRepository(baseRepo, commits, s.Name, s.Paths[0], Enumerable.Empty<SharedRepo>(), merge));
                     Console.WriteLine($"Split {s.Commits.Count} commits.");
                 }
                 foreach (var root in rootDirectories)
                 {
                     Console.WriteLine($"Splitting project repository {root}...");
-                    var commitMapping = SplitRepository(baseRepo, commits, root, root, shared).ToDictionary(t => t.Item1, t => t.Item2);
+                    var commitMapping = SplitRepository(baseRepo, commits, root, root, shared, merge).ToDictionary(t => t.Item1, t => t.Item2);
                     Console.WriteLine($"Split {commitMapping.Count} commits.");
 
                     using (var repo = new Repository(Path.Combine("output", root)))
                     {
                         Console.WriteLine($"Converting tags with prefix {root}-...");
+                        foreach (var toMerge in merge)
+                        {
+                            if (toMerge.Name == root)
+                            {
+                                using (var mergeRepo = new Repository(toMerge.Repo))
+                                {
+                                    foreach (var tag in mergeRepo.Tags.Where(t => t.FriendlyName.StartsWith(root + "-")))
+                                    {
+                                        if (commitMapping.ContainsKey(new ObjectId(tag.Target.Sha)))
+                                        {
+                                            repo.Tags.Add(tag.FriendlyName, commitMapping[new ObjectId(tag.Target.Sha)].Sha);
+                                            Console.WriteLine($"Converted tag {tag.FriendlyName} from {toMerge.Repo}");
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine($"Warning: No commit for tag {tag.FriendlyName} from {toMerge.Repo}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         foreach (var tag in baseRepo.Tags.Where(t => t.FriendlyName.StartsWith(root + "-")))
                         {
                             if (commitMapping.ContainsKey(new ObjectId(tag.Target.Sha)))
@@ -98,7 +159,7 @@ namespace SplitGitRepo
             }
         }
 
-        private static IEnumerable<Tuple<ObjectId, ObjectId>> SplitRepository(Repository baseRepo, ICommitLog commits, string name, string path, IEnumerable<SharedRepo> sharedRepos)
+        private static IEnumerable<Tuple<ObjectId, ObjectId>> SplitRepository(Repository baseRepo, ICommitLog commits, string name, string path, IEnumerable<SharedRepo> sharedRepos, IEnumerable<MergedRepo> mergedRepos)
         {
             var shared = sharedRepos.Where(r => r.Paths.Any(p => p.StartsWith(path + "/"))).Select(r => new
             {
@@ -106,6 +167,7 @@ namespace SplitGitRepo
                 Path = r.Paths.First(p => p.StartsWith(path + "/")).Substring(path.Length + 1),
                 Commits = r.Commits
             });
+            var merged = mergedRepos.Where(r => r.Name == name);
 
             using (var repo = new Repository(Repository.Init(Path.Combine("output", name))))
             {
@@ -113,6 +175,34 @@ namespace SplitGitRepo
                 repo.Index.Add(".gitignore");
                 File.Copy(Path.Combine("VaultToGitTemp", ".gitattributes"), Path.Combine("output", name, ".gitattributes"));
                 repo.Index.Add(".gitattributes");
+
+                foreach (var toMerge in merged)
+                {
+                    using (var mergeRepo = new Repository(toMerge.Repo))
+                    {
+                        foreach (var c in mergeRepo.Commits.QueryBy(new CommitFilter { SortBy = CommitSortStrategies.Topological | CommitSortStrategies.Reverse }))
+                        {
+                            bool any = false;
+
+                            foreach (var m in toMerge.Mapping)
+                            {
+                                if (Merge(repo, c, m.Key, m.Value))
+                                {
+                                    any = true;
+                                }
+                            }
+
+                            if (any)
+                            {
+                                var rewrittenCommit = repo.Commit(c.Message, new Signature(c.Author.Name, c.Author.Email, c.Author.When), new Signature(c.Committer.Name, c.Author.Email, c.Author.When), new CommitOptions { AllowEmptyCommit = true });
+                                yield return new Tuple<ObjectId, ObjectId>(c.Id, rewrittenCommit.Id);
+                            }
+                        }
+                    }
+                    repo.Index.Clear();
+                    repo.Index.Add(".gitignore");
+                    repo.Index.Add(".gitattributes");
+                }
 
                 if (shared.Any())
                 {
@@ -213,7 +303,7 @@ namespace SplitGitRepo
                 repo.Network.Remotes.Add("origin", "git@gitlab.com:inedo/" + name + ".git");
 
                 Console.WriteLine("Copying LFS files...");
-                var lfsCount = CopyLfsFiles(repo, Path.Combine("output", name, ".git", "lfs", "objects"), Path.Combine(baseRepo.Info.WorkingDirectory, ".git", "lfs", "objects"));
+                var lfsCount = CopyLfsFiles(repo, Path.Combine("output", name, ".git", "lfs", "objects"), new[] { Path.Combine(baseRepo.Info.WorkingDirectory, ".git", "lfs", "objects") }.Concat(merged.Where(r => r.Name == name).Select(r => Path.Combine(r.Repo, ".git", "lfs", "objects"))));
                 Console.WriteLine($"Copied {lfsCount} files.");
 
                 // LibGit2Sharp doesn't support git gc, so we use the command line:
@@ -228,18 +318,121 @@ namespace SplitGitRepo
             }
         }
 
+        private static bool Merge(Repository repo, Commit c, string src, string dst)
+        {
+            var newObject = c.Tree[src];
+            var oldObject = c.Parents.FirstOrDefault()?.Tree?[src];
+            if (newObject == null)
+            {
+                return false;
+            }
+            if (newObject.TargetType != oldObject?.TargetType)
+            {
+                if (oldObject != null)
+                {
+                    repo.Index.Remove(dst);
+                }
+
+                if (newObject.TargetType == TreeEntryTargetType.Tree)
+                {
+                    Merge(repo, null, (Tree)newObject.Target, null, newObject.Mode, dst);
+                }
+                else if (newObject.TargetType == TreeEntryTargetType.Blob)
+                {
+                    Merge(repo, null, (Blob)newObject.Target, null, newObject.Mode, dst);
+                }
+                return true;
+            }
+            if (newObject.TargetType == TreeEntryTargetType.Tree)
+            {
+                return Merge(repo, (Tree)oldObject.Target, (Tree)newObject.Target, oldObject.Mode, newObject.Mode, dst);
+            }
+            if (newObject.TargetType == TreeEntryTargetType.Blob)
+            {
+                return Merge(repo, (Blob)oldObject.Target, (Blob)newObject.Target, oldObject.Mode, newObject.Mode, dst);
+            }
+            return false;
+        }
+
+        private static bool Merge(Repository repo, Tree left, Tree right, Mode? oldMode, Mode newMode, string dst)
+        {
+            if (left == null)
+            {
+                foreach (var entry in right)
+                {
+                    if (entry.TargetType == TreeEntryTargetType.Tree)
+                    {
+                        Merge(repo, null, (Tree)entry.Target, null, entry.Mode, Path.Combine(dst, entry.Name));
+                    }
+                    else if (entry.TargetType == TreeEntryTargetType.Blob)
+                    {
+                        Merge(repo, null, (Blob)entry.Target, null, entry.Mode, Path.Combine(dst, entry.Name));
+                    }
+                }
+                return true;
+            }
+
+            bool any = false;
+            foreach (var leftEntry in left)
+            {
+                var rightEntry = right[leftEntry.Name];
+                if (leftEntry.TargetType != rightEntry?.TargetType)
+                {
+                    repo.Index.Remove(Path.Combine(dst, leftEntry.Name));
+                    any = true;
+                }
+            }
+
+            foreach (var rightEntry in right)
+            {
+                var leftEntry = left[rightEntry.Name];
+                if (rightEntry.TargetType == TreeEntryTargetType.Tree)
+                {
+                    if (Merge(repo, leftEntry?.Target as Tree, (Tree)rightEntry.Target, leftEntry?.Mode, rightEntry.Mode, Path.Combine(dst, rightEntry.Name)))
+                    {
+                        any = true;
+                    }
+                }
+                else if (rightEntry.TargetType == TreeEntryTargetType.Blob)
+                {
+                    if (Merge(repo, leftEntry?.Target as Blob, (Blob)rightEntry.Target, leftEntry?.Mode, rightEntry.Mode, Path.Combine(dst, rightEntry.Name)))
+                    {
+                        any = true;
+                    }
+                }
+            }
+
+            return any;
+        }
+
+        private static bool Merge(Repository repo, Blob left, Blob right, Mode? oldMode, Mode newMode, string dst)
+        {
+            if (left?.Id == right.Id && oldMode == newMode)
+            {
+                return false;
+            }
+
+            Blob blob;
+            using (var input = right.GetContentStream())
+            {
+                blob = repo.ObjectDatabase.CreateBlob(input);
+            }
+            repo.Index.Add(blob, dst, newMode);
+            return true;
+        }
+
         private static readonly Regex LfsFilePattern = new Regex(@"\.(exe|ico|zip|snk|dylib|dll|png|jpg|gif|so)$", RegexOptions.Compiled);
-        private static int CopyLfsFiles(Repository repo, string dest, string src)
+        private static int CopyLfsFiles(Repository repo, string dest, IEnumerable<string> sources)
         {
             int count = 0;
             foreach (var commit in repo.Commits)
             {
-                count += CopyLfsFiles(commit.Tree, dest, src);
+                count += CopyLfsFiles(commit.Tree, dest, sources);
             }
             return count;
         }
 
-        private static int CopyLfsFiles(Tree tree, string dest, string src)
+        private static int CopyLfsFiles(Tree tree, string dest, IEnumerable<string> sources)
         {
             int count = 0;
 
@@ -255,15 +448,16 @@ namespace SplitGitRepo
                     oid = oid.Substring("oid sha256:".Length);
 
                     Directory.CreateDirectory(Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2)));
-                    if (!File.Exists(Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2), oid)))
+                    var target = Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2), oid);
+                    if (!File.Exists(target))
                     {
-                        File.Copy(Path.Combine(src, oid.Substring(0, 2), oid.Substring(2, 2), oid), Path.Combine(dest, oid.Substring(0, 2), oid.Substring(2, 2), oid));
+                        File.Copy(sources.Select(src => Path.Combine(src, oid.Substring(0, 2), oid.Substring(2, 2), oid)).Where(File.Exists).First(), target);
                         count++;
                     }
                 }
                 else if (entry.TargetType == TreeEntryTargetType.Tree)
                 {
-                    count += CopyLfsFiles((Tree)entry.Target, dest, src);
+                    count += CopyLfsFiles((Tree)entry.Target, dest, sources);
                 }
             }
 
