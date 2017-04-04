@@ -82,11 +82,8 @@ namespace VaultToGit
 
 *.suo
 *.clw
-*.config
 *.dca
-*.dll
 *.dsw
-*.exe
 *.hlp
 *.incr
 *.ncb
@@ -166,6 +163,36 @@ release/
                             try
                             {
                                 GetOperations.ProcessCommandGetVersion("$", (int)version.Version, getOptions);
+
+                                foreach (var item in ServerOperations.ProcessCommandTxDetail(version.TxID).items)
+                                {
+                                    string requestType;
+                                    switch (item.RequestType)
+                                    {
+                                        case VaultRequestType.Delete:
+                                            requestType = "delete";
+                                            break;
+                                        case VaultRequestType.Move:
+                                            requestType = "move";
+                                            break;
+                                        case VaultRequestType.Rename:
+                                            requestType = "rename";
+                                            break;
+                                        default:
+                                            continue;
+                                    }
+                                    var path = Path.Combine(Directory.GetCurrentDirectory(), repository.Value, item.ItemPath1.Substring("$/".Length));
+                                    if (File.Exists(path))
+                                    {
+                                        Console.WriteLine($"Vault forgot to {requestType} file {item.ItemPath1}.");
+                                        File.Delete(path);
+                                    }
+                                    if (Directory.Exists(path))
+                                    {
+                                        Console.WriteLine($"Vault forgot to {requestType} directory {item.ItemPath1}.");
+                                        Directory.Delete(path, true);
+                                    }
+                                }
                             }
                             catch (Exception ex) when (ex.Message.StartsWith("There is no version "))
                             {
@@ -255,6 +282,7 @@ release/
                         if (commit == null)
                         {
                             Console.WriteLine($"Could not find commit for label {label.Label}");
+                            continue;
                         }
                         using (var tag = Process.Start(new ProcessStartInfo("git", $"tag -f \"{label.Label.Replace(' ', '-')}\" {commit}")
                         {
