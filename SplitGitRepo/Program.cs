@@ -118,7 +118,26 @@ namespace SplitGitRepo
                                         }
                                         else
                                         {
-                                            Console.WriteLine($"Warning: No commit for tag {tag.FriendlyName} from {toMerge.Repo}");
+                                            int count = 0;
+                                            var target = tag.Target as Commit;
+                                            while (target != null)
+                                            {
+                                                if (commitMapping.ContainsKey(new ObjectId(target.Sha)))
+                                                {
+                                                    break;
+                                                }
+                                                count++;
+                                                target = target.Parents.FirstOrDefault();
+                                            }
+                                            if (target != null)
+                                            {
+                                                repo.Tags.Add(tag.FriendlyName, commitMapping[new ObjectId(target.Sha)].Sha);
+                                                Console.WriteLine($"Converted tag {tag.FriendlyName} from {toMerge.Repo} (went back {count} commits)");
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine($"Warning: No commit for tag {tag.FriendlyName} from {toMerge.Repo}");
+                                            }
                                         }
                                     }
                                 }
@@ -133,7 +152,26 @@ namespace SplitGitRepo
                             }
                             else
                             {
-                                Console.WriteLine($"Warning: No commit for tag {tag.FriendlyName}");
+                                int count = 0;
+                                var target = tag.Target as Commit;
+                                while (target != null)
+                                {
+                                    if (commitMapping.ContainsKey(new ObjectId(target.Sha)))
+                                    {
+                                        break;
+                                    }
+                                    count++;
+                                    target = target.Parents.FirstOrDefault();
+                                }
+                                if (target != null)
+                                {
+                                    repo.Tags.Add(tag.FriendlyName, commitMapping[new ObjectId(target.Sha)].Sha);
+                                    Console.WriteLine($"Converted tag {tag.FriendlyName} (went back {count} commits)");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"Warning: No commit for tag {tag.FriendlyName}");
+                                }
                             }
                         }
                     }
