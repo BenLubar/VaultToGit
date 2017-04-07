@@ -8,102 +8,66 @@ using System.Text.RegularExpressions;
 
 namespace SplitGitRepo
 {
+    struct SharedRepo
+    {
+        public SharedRepo(string name, params string[] paths)
+        {
+            this.Name = name;
+            this.Paths = paths;
+            this.Commits = new List<Tuple<ObjectId, ObjectId>>();
+        }
+
+        public string Name { get; }
+        public string[] Paths { get; }
+        public List<Tuple<ObjectId, ObjectId>> Commits { get; }
+    }
+
+    struct MergedRepo
+    {
+        public MergedRepo(string name, string repo, IDictionary<string, string> mapping)
+        {
+            this.Name = name;
+            this.Repo = repo;
+            this.Mapping = mapping;
+        }
+
+        public string Name { get; }
+        public string Repo { get; }
+        public IDictionary<string, string> Mapping { get; }
+    }
+
     class Program
     {
-        private struct SharedRepo
-        {
-            public SharedRepo(string name, params string[] paths)
-            {
-                this.Name = name;
-                this.Paths = paths;
-                this.Commits = new List<Tuple<ObjectId, ObjectId>>();
-            }
-
-            public string Name { get; }
-            public string[] Paths { get; }
-            public List<Tuple<ObjectId, ObjectId>> Commits { get; }
-        }
-
-        private struct MergedRepo
-        {
-            public MergedRepo(string name, string repo, IDictionary<string, string> mapping)
-            {
-                this.Name = name;
-                this.Repo = repo;
-                this.Mapping = mapping;
-            }
-
-            public string Name { get; }
-            public string Repo { get; }
-            public IDictionary<string, string> Mapping { get; }
-        }
-
         static void Main(string[] args)
         {
-            using (var baseRepo = new Repository("VaultToGitTemp"))
+            using (var baseRepo = new Repository(Config.Instance.MainRepo))
             {
                 var commits = baseRepo.Commits.QueryBy(new CommitFilter { SortBy = CommitSortStrategies.Topological | CommitSortStrategies.Reverse });
                 Console.WriteLine("Enumerating root directories...");
                 var rootDirectories = commits.SelectMany(c => c.Tree.Where(t => t.TargetType == TreeEntryTargetType.Tree && !t.Name.Contains('-')).Select(t => t.Path)).Distinct().OrderBy(s => s).ToList();
                 Console.WriteLine($"Found {rootDirectories.Count} root directories.");
-                var merge = new[]
-                {
-                    new MergedRepo("BuildMaster", "VaultToGitTemp_BuildMaster", new Dictionary<string, string>
-                    {
-                        { "BuildMaster/BuildMasterSolution", "BuildMasterSolution" },
-                        { "TRUNK/BuildMasterSolution", "BuildMasterSolution" },
-                        { "BuildMaster/SqlScripts", "SqlScripts" },
-                        { "TRUNK/SqlScripts", "SqlScripts" },
-                        { "BuildMaster/deploy_production.vbs", "deploy_production.vbs" },
-                        { "TRUNK/deploy_production.vbs", "deploy_production.vbs" },
-                        { "BuildMaster/deploy_production.ps1", "deploy_production.ps1" },
-                        { "BuildMaster/stwiddle.exe", "stwiddle.exe" },
-                        { "TRUNK/stwiddle.exe", "stwiddle.exe" },
-                        { "BuildMaster/unzip.exe", "unzip.exe" },
-                        { "TRUNK/unzip.exe", "unzip.exe" },
-                        { "BuildMaster/zip.exe", "zip.exe" },
-                        { "TRUNK/zip.exe", "zip.exe" },
-                    }),
-                    new MergedRepo("BuildMasterInstaller", "VaultToGitTemp_BuildMaster", new Dictionary<string, string>
-                    {
-                        { "BuildMasterInstaller", "" },
-                        { "BuildMaster/Installer", "" },
-                        { "Installer", "" },
-                        { "TRUNK/Installer", "" },
-                    }),
-                };
-                var shared = new[]
-                {
-                    new SharedRepo("BuildMasterOtter.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtter.Web", "Otter/src/BuildMasterOtter.Web"),
-                    new SharedRepo("BuildMasterOtterProGet.Web", "BuildMaster/BuildMasterSolution/Web/BuildMasterOtterProGet.Web", "ProGet/BuildMasterOtterProGet.Web", "Otter/src/BuildMasterOtterProGet.Web"),
-                    new SharedRepo("InedoLibWeb", "Otter/src/InedoLibWeb", "ProGet/InedoLibWeb"),
-                    new SharedRepo("LESSCompiler", "Otter/LESSCompiler", "Crm1000/LESSCompiler", "InedoLib/LESSCompiler", "ProGet/LESSCompiler", "BuildMaster/LESSCompiler", "ChangeVision/AstahWebsite/Resources/LESSCompiler", "Inedo/inedo.com/Inedo.Com.Web.WebApplication/Resources/LESSCompiler"),
-                    new SharedRepo("Consolation", "Otter/src/romp/Consolation", "ProGet/ProGet.Client/Consolation", "Inedo/incluser/incluser/Consolation", "Inedo.Agents/Inedo.Agents.Service/Consolation"),
-                    new SharedRepo("TypeDefinitions", "ProGet/ProGet.WebApplication/Resources/TypeDefinitions", "Crm1000/Web/Resources/TypeDefinitions"),
-                    new SharedRepo("WindowsServices", "InedoLib/InedoLib.NET45/WindowsServices", "Otter/src/Inedo.Agents.Service/SharedWithInedoLib/WindowsServices"),
-                };
                 Console.WriteLine("Clearing output directory...");
                 if (Directory.Exists("output"))
                 {
                     Directory.Delete("output", true);
                 }
                 Directory.CreateDirectory("output");
-                foreach (var s in shared)
+                foreach (var s in Config.Instance.Shared)
                 {
                     Console.WriteLine($"Splitting {s.Name} (shared by {s.Paths.Length} projects)...");
-                    s.Commits.AddRange(SplitRepository(baseRepo, commits, s.Name, s.Paths[0], Enumerable.Empty<SharedRepo>(), merge));
+                    s.Commits.AddRange(SplitRepository(baseRepo, commits, s.Name, s.Paths[0], Enumerable.Empty<SharedRepo>(), Config.Instance.Merge));
                     Console.WriteLine($"Split {s.Commits.Count} commits.");
                 }
                 foreach (var root in rootDirectories)
                 {
                     Console.WriteLine($"Splitting project repository {root}...");
-                    var commitMapping = SplitRepository(baseRepo, commits, root, root, shared, merge).ToDictionary(t => t.Item1, t => t.Item2);
+                    var commitMapping = SplitRepository(baseRepo, commits, root, root, Config.Instance.Shared, Config.Instance.Merge).ToDictionary(t => t.Item1, t => t.Item2);
                     Console.WriteLine($"Split {commitMapping.Count} commits.");
 
                     using (var repo = new Repository(Path.Combine("output", root)))
                     {
                         Console.WriteLine($"Converting tags with prefix {root}-...");
-                        foreach (var toMerge in merge)
+                        foreach (var toMerge in Config.Instance.Merge)
                         {
                             if (toMerge.Name == root)
                             {
@@ -209,9 +173,9 @@ namespace SplitGitRepo
 
             using (var repo = new Repository(Repository.Init(Path.Combine("output", name))))
             {
-                File.Copy(Path.Combine("VaultToGitTemp", ".gitignore"), Path.Combine("output", name, ".gitignore"));
+                File.Copy(Path.Combine(Config.Instance.MainRepo, ".gitignore"), Path.Combine("output", name, ".gitignore"));
                 repo.Index.Add(".gitignore");
-                File.Copy(Path.Combine("VaultToGitTemp", ".gitattributes"), Path.Combine("output", name, ".gitattributes"));
+                File.Copy(Path.Combine(Config.Instance.MainRepo, ".gitattributes"), Path.Combine("output", name, ".gitattributes"));
                 repo.Index.Add(".gitattributes");
 
                 foreach (var toMerge in merged)
@@ -232,7 +196,7 @@ namespace SplitGitRepo
 
                             if (any)
                             {
-                                var rewrittenCommit = repo.Commit(c.Message, new Signature(c.Author.Name, c.Author.Email, c.Author.When), new Signature(c.Committer.Name, c.Author.Email, c.Author.When), new CommitOptions { AllowEmptyCommit = true });
+                                var rewrittenCommit = repo.Commit(c.Message, new Signature(c.Author.Name, Config.Instance.MapEmail(c.Author.Email), c.Author.When), new Signature(c.Committer.Name, Config.Instance.MapEmail(c.Author.Email), c.Author.When), new CommitOptions { AllowEmptyCommit = true });
                                 yield return new Tuple<ObjectId, ObjectId>(c.Id, rewrittenCommit.Id);
                             }
                         }
@@ -333,12 +297,12 @@ namespace SplitGitRepo
                         }
                     }
 
-                    var email = c.Author.Email == "blubar@inedo.com" ? "ben.lubar@gmail.com" : c.Author.Email;
+                    var email = Config.Instance.MapEmail(c.Author.Email);
                     var rewrittenCommit = repo.Commit(c.Message, new Signature(c.Author.Name, email, c.Author.When), new Signature(c.Committer.Name, email, c.Author.When), new CommitOptions { AllowEmptyCommit = true });
                     yield return new Tuple<ObjectId, ObjectId>(c.Id, rewrittenCommit.Id);
                 }
 
-                repo.Network.Remotes.Add("origin", "git@gitlab.com:inedo/" + name + ".git");
+                repo.Network.Remotes.Add("origin", Config.Instance.Origin(name));
 
                 Console.WriteLine("Copying LFS files...");
                 var lfsCount = CopyLfsFiles(repo, Path.Combine("output", name, ".git", "lfs", "objects"), new[] { Path.Combine(baseRepo.Info.WorkingDirectory, ".git", "lfs", "objects") }.Concat(merged.Where(r => r.Name == name).Select(r => Path.Combine(r.Repo, ".git", "lfs", "objects"))));
