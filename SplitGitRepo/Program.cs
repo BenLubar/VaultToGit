@@ -442,7 +442,12 @@ namespace SplitGitRepo
             {
                 if (entry.TargetType == TreeEntryTargetType.Blob && LfsFilePattern.IsMatch(entry.Name))
                 {
-                    var oid = ((Blob)entry.Target).GetContentText().Split('\n').ElementAt(1).Trim();
+                    var lines = ((Blob)entry.Target).GetContentText().Split('\n');
+                    if (lines.All(string.IsNullOrWhiteSpace))
+                    {
+                        continue;
+                    }
+                    var oid = lines.ElementAt(1).Trim();
                     if (!oid.StartsWith("oid sha256:"))
                     {
                         throw new FormatException($"OID format: {oid}");
