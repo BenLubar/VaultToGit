@@ -269,7 +269,7 @@ namespace SplitGitRepo
                                 {
                                     Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine("output", name, file.Path)));
                                     using (var input = baseRepo.Lookup<Blob>(file.Oid).GetContentStream())
-                                    using (var output = new FileStream(Path.Combine("output", name, file.Path), FileMode.OpenOrCreate, FileAccess.Write))
+                                    using (var output = File.Create(Path.Combine("output", name, file.Path)))
                                     {
                                         input.CopyTo(output);
                                     }
